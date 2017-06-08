@@ -1,0 +1,107 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "ECS: task definition to be associated to an ECS service"
+Parameters:
+  TaskFamily:
+    Description: Task Family
+    Type: String
+    Default: main
+  
+  DockerImage:
+    Description: 'The image to use for a container, which is passed directly to the Docker daemon. You can use images in the Docker Hub registry or specify other repositories (repository-url/image:tag).'
+    Type: String
+    Default: nginx
+
+  ContainerName:
+    Description: Container Name
+    Type: String
+    Default: main
+
+  ContainerMemory:
+    Description: Container Memory
+    Type: Number
+    Default: 128
+
+  ContainerPort:
+    Description: Container Port
+    Type: Number
+    Default: 80
+
+  ContainerProtocol:
+    Description: Container Protocol
+    Type: String
+    AllowedValues:
+    - tcp
+    - udp
+    Default: tcp
+
+  LogsRetentionInDays:
+    Description: Log retention
+    Type: Number
+    Default: 14
+
+Resources:
+  LogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Ref TaskFamily
+      RetentionInDays: !Ref LogsRetentionInDays
+  TaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties: 
+      Family: !Ref TaskFamily
+      NetworkMode: bridge
+      ContainerDefinitions:
+      - Name: !Ref ContainerName
+        Image: !Ref DockerImage
+        Memory: !Ref ContainerMemory
+        PortMappings:
+        - ContainerPort: !Ref ContainerPort
+          Protocol: tcp
+        Essential: true
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            'awslogs-region': !Ref 'AWS::Region'
+            'awslogs-group': !Ref TaskFamily
+            'awslogs-stream-prefix': !Ref TaskFamily
+  
+Outputs:
+  TemplateID:
+    Description: 'cloudonaut.io template id'
+    Value: 'ecs/task-definition'
+  TaskFamily:
+    Description: 'Task Family'
+    Value: !Ref TaskFamily
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskFamily'
+  DockerImage:
+    Description: 'Task Family'
+    Value: !Ref DockerImage
+    Export:
+      Name: !Sub '${AWS::StackName}-DockerImage'
+  ContainerName:
+    Description: 'Task Family'
+    Value: !Ref ContainerName
+    Export:
+      Name: !Sub '${AWS::StackName}-ContainerName'
+  ContainerMemory:
+    Description: 'Task Family'
+    Value: !Ref ContainerMemory
+    Export:
+      Name: !Sub '${AWS::StackName}-ContainerMemory'
+  ContainerPort:
+    Description: 'Task Family'
+    Value: !Ref ContainerPort
+    Export:
+      Name: !Sub '${AWS::StackName}-ContainerPort'
+  ContainerProtocol:
+    Description: 'Task Family'
+    Value: !Ref ContainerProtocol
+    Export:
+      Name: !Sub '${AWS::StackName}-ContainerProtocol'
+  TaskDefinition:
+    Description: 'Created task definition'
+    Value: !Ref TaskDefinition
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskDefinition'
