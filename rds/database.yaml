@@ -6,21 +6,18 @@ Parameters:
   ParentSourceStack:
     Type: String
 
-  SnapToRestore:
+  DatabaseSnapshot:
     Type: String
     Default: ""
     Description: snap id to restore
 
   DatabaseEngine:
     Type: String
-    Default: MariaDB
+    Default: mysql
     AllowedValues:
-      - Amazon Aurora
-      - MySQL
-      - MariaDB
-      - PostgreSQL
-      - Oracle
-      - SQL Server
+      - mysql
+      - mariadb
+      - postgres
 
   DatabaseEngineVersion:
     Type: String
@@ -56,28 +53,16 @@ Parameters:
 Conditions:
   isSpecificVersion:
     !Not [!Equals [!Ref DatabaseEngineVersion, ""]]
-  isAmazonAurora:
-    !Equals [!Ref DatabaseEngine, "Amazon Aurora"]
-  isNotAmazonAurora:
-    !Not [!Equals [!Ref DatabaseEngine, "Amazon Aurora"]]
   isMySQL:
-    !Equals [!Ref DatabaseEngine, "MySQL"]
+    !Equals [!Ref DatabaseEngine, "mysql"]
   isMariaDB:
-    !Equals [!Ref DatabaseEngine, "MariaDB"]
+    !Equals [!Ref DatabaseEngine, "mariadb"]
   isMySQLCompatible:
-    !Or [!Condition isAmazonAurora, !Condition isMySQL, !Condition isMariaDB]
+    !Or [!Condition isMySQL, !Condition isMariaDB]
   isPostgreSQL:
-    !Equals [!Ref DatabaseEngine, "PostgreSQL"]
-  isOracle:
-    !Equals [!Ref DatabaseEngine, "Oracle"]
-  isSQLServer:
-    !Equals [!Ref DatabaseEngine, "SQL Server"]
+    !Equals [!Ref DatabaseEngine, "postgres"]
   isRestore:
-    !Not [!Equals [!Ref SnapToRestore, ""]]
-  isAmazonAuroraRestore:
-    !And [!Condition isAmazonAurora, !Condition isRestore]
-  isNotAmazonAuroraRestore:
-    !And [!Condition isNotAmazonAurora, !Condition isRestore]
+    !Not [!Equals [!Ref DatabaseSnapshot, ""]]
 
 Resources:
   SubnetGroup:
@@ -118,54 +103,60 @@ Resources:
       SourceSecurityGroupId:
         'Fn::ImportValue': !Sub '${ParentSourceStack}-SecurityGroup'
 
-  SecurityGroupIngressSQLServer:
-    Type: 'AWS::EC2::SecurityGroupIngress'
-    Condition: isSQLServer
-    Properties:
-      GroupId: !Ref SecurityGroup
-      IpProtocol: tcp
-      FromPort: 1433
-      ToPort: 1433
-      SourceSecurityGroupId:
-        'Fn::ImportValue': !Sub '${ParentSourceStack}-SecurityGroup'
-
-  SecurityGroupIngressOracle:
-    Type: 'AWS::EC2::SecurityGroupIngress'
-    Condition: isOracle
-    Properties:
-      GroupId: !Ref SecurityGroup
-      IpProtocol: tcp
-      FromPort: 1521
-      ToPort: 1521
-      SourceSecurityGroupId:
-        'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'
-
   Database:
     Type: "AWS::RDS::DBInstance"
     DeletionPolicy: Snapshot
-    Condition: isNotAmazonAurora
     Properties:
       AllocatedStorage: !Ref DatabaseAllocatedStorage
       DBInstanceClass: !Ref DatabaseInstanceClass
-      DBName: !If [isNotAmazonAuroraRestore, !Ref "AWS::NoValue", !Ref DatabaseName]
+      DBName: !If [isRestore, !Ref "AWS::NoValue", !Ref DatabaseName]
       Engine: !Ref DatabaseEngine
       EngineVersion: !If [isSpecificVersion, !Ref DatabaseEngineVersion, !Ref "AWS::NoValue"]
       StorageType: !Ref DatabaseStorageType
-      MasterUsername: !If [isNotAmazonAuroraRestore, !Ref "AWS::NoValue", !Ref DatabaseUser]
-      MasterUserPassword: !If [isNotAmazonAuroraRestore, !Ref "AWS::NoValue", !Ref DatabasePass]
-      DBSnapshotIdentifier: !If [isNotAmazonAuroraRestore, !Ref SnapToRestore, !Ref "AWS::NoValue"]
-      DBClusterIdentifier: !If [isAmazonAurora, !Ref DBAuroraCluster, !Ref "AWS::NoValue"]
+      MasterUsername: !If [isRestore, !Ref "AWS::NoValue", !Ref DatabaseUser]
+      MasterUserPassword: !If [isRestore, !Ref "AWS::NoValue", !Ref DatabasePass]
+      DBSnapshotIdentifier: !If [isRestore, !Ref DatabaseSnapshot, !Ref "AWS::NoValue"]
       DBSubnetGroupName: !Ref SubnetGroup
       VPCSecurityGroups:
         - !GetAtt SecurityGroup.GroupId
 
-  DBAuroraCluster:
-    Type: "AWS::RDS::DBCluster"
-    DeletionPolicy: Snapshot
-    Condition: isAmazonAurora
-    Properties:
-      DatabaseName: !If [isAmazonAuroraRestore, !Ref "AWS::NoValue", !Ref DatabaseName]
-      Engine: !Ref DatabaseEngine
-      MasterUsername: !If [isAmazonAuroraRestore, !Ref "AWS::NoValue", !Ref DatabaseUser]
-      MasterUserPassword: !If [isAmazonAuroraRestore, !Ref "AWS::NoValue", !Ref DatabasePass]
-      SnapshotIdentifier: !If [isAmazonAuroraRestore, !Ref SnapToRestore, !Ref "AWS::NoValue"]
+Outputs:
+  TemplateID:
+    Description: 'cloudonaut.io template id'
+    Value: 'rds/database'
+  Cluster:
+    Description: 'RDS database'
+    Value: !Ref Database
+    Export:
+      Name: !Sub '${AWS::StackName}-Database'
+  VPC:
+    Description: 'VPC of RDS database'
+    Value:
+      'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'
+    Export:
+      Name: !Sub '${AWS::StackName}-VPC'
+  SecurityGroup:
+    Description: 'Security Group of RDS database'
+    Value: !Ref SecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroup'
+  EndpointAddress:
+    Description: 'RDS endpoint address'
+    Value: !GetAtt 'Database.Endpoint.Address'
+    Export:
+      Name: !Sub '${AWS::StackName}-EndpointAddress'
+  EndpointPort:
+    Description: 'RDS endpoint port'
+    Value: !GetAtt 'Database.Endpoint.Address'
+    Export:
+      Name: !Sub '${AWS::StackName}-EndpointPort'
+  DatabaseUser:
+    Description: 'database master username'
+    Value: !Ref DatabaseUser
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseUser'
+  DatabasePass:
+    Description: 'database master password'
+    Value: !Ref DatabasePass
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabasePass'
