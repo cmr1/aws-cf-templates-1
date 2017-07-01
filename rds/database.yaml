@@ -152,11 +152,11 @@ Outputs:
       Name: !Sub '${AWS::StackName}-EndpointPort'
   DatabaseUser:
     Description: 'database master username'
-    Value: !Ref DatabaseUser
+    Value: !If [isRestore, "none", !Ref DatabaseUser]
     Export:
       Name: !Sub '${AWS::StackName}-DatabaseUser'
   DatabasePass:
     Description: 'database master password'
-    Value: !Ref DatabasePass
+    Value: !If [isRestore, "none", !Ref DatabasePass]
     Export:
       Name: !Sub '${AWS::StackName}-DatabasePass'
