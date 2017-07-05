@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Static site on S3 with CloudFront distribution
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues:
+      - staging
+      - production
+    Default: staging
+  
+  ChallengeType:
+    Type: String
+    AllowedValues:
+      - dns-01
+      - http-01
+    Default: dns-01
+  
+  KeySize:
+    Type: Number
+    Default: 2048
+  
+  ContactEmail:
+    Type: String
+  
+  OutputACM:
+    Type: String
+    AllowedValues:
+      - 'yes'
+      - 'no'
+    Default: 'yes'
+
+  LogsRetentionInDays:
+    Description: 'Specifies the number of days you want to retain log events in the specified log group.'
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+
+Resources:
+  TaskRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 'ecs-tasks.amazonaws.com'
+          Action: 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+      - PolicyName: route53
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'route53:*'
+            - 'route53domains:*'
+            Resource: '*'
+      - PolicyName: acm
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'acm:*'
+            Resource: '*'
+      
+  LogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      RetentionInDays: !Ref LogsRetentionInDays
+
+  TaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties: 
+      Family: !Ref 'AWS::StackName'
+      TaskRoleArn: !Ref TaskRole
+      NetworkMode: bridge
+      ContainerDefinitions:
+      - Name: sslr
+        Image: cmr1/sslr
+        Cpu: 128
+        Memory: 128
+        Environment:
+          - Name: APP_ENV
+            Value: !Ref Environment
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref 'AWS::Region'
+          - Name: CHALLENGETYPE
+            Value: !Ref ChallengeType
+          - Name: CONTACT_EMAIL
+            Value: !Ref ContactEmail
+          - Name: KEYSIZE
+            Value: !Ref KeySize
+          - Name: OUTPUT_ACM
+            Value: !Ref OutputACM
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            'awslogs-region': !Ref 'AWS::Region'
+            'awslogs-group': !Ref LogGroup
+            'awslogs-stream-prefix': !Ref 'AWS::StackName'
