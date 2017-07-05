@@ -147,7 +147,7 @@ Outputs:
       Name: !Sub '${AWS::StackName}-EndpointAddress'
   EndpointPort:
     Description: 'RDS endpoint port'
-    Value: !GetAtt 'Database.Endpoint.Address'
+    Value: !GetAtt 'Database.Endpoint.Port'
     Export:
       Name: !Sub '${AWS::StackName}-EndpointPort'
   DatabaseUser:
