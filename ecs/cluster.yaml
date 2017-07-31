@@ -119,27 +119,27 @@ Parameters:
 Mappings:
   RegionMap:
     'eu-west-2':
-      ECSAMI: 'ami-bf9481db'
+      ECSAMI: 'ami-ff15039b'
     'eu-west-1':
-      ECSAMI: 'ami-95f8d2f3'
+      ECSAMI: 'ami-809f84e6'
     'ap-northeast-1':
-      ECSAMI: 'ami-f63f6f91'
+      ECSAMI: 'ami-e4657283'
     'ca-central-1':
-      ECSAMI: 'ami-ee58e58a'
+      ECSAMI: 'ami-3da81759'
     'ap-southeast-1':
-      ECSAMI: 'ami-b4ae1dd7'
+      ECSAMI: 'ami-19f7787a'
     'ap-southeast-2':
-      ECSAMI: 'ami-fbe9eb98'
+      ECSAMI: 'ami-42e9f921'
     'eu-central-1':
-      ECSAMI: 'ami-085e8a67'
+      ECSAMI: 'ami-a3a006cc'
     'us-east-1':
-      ECSAMI: 'ami-275ffe31'
+      ECSAMI: 'ami-04351e12'
     'us-east-2':
-      ECSAMI: 'ami-62745007'
+      ECSAMI: 'ami-207b5a45'
     'us-west-1':
-      ECSAMI: 'ami-689bc208'
+      ECSAMI: 'ami-7d664a1d'
     'us-west-2':
-      ECSAMI: 'ami-62d35c02'
+      ECSAMI: 'ami-57d9cd2e'
 Conditions:
   HasKeyName: !Not [!Equals [!Ref KeyName, '']]
   HasIAMUserSSHAccess: !Equals [!Ref IAMUserSSHAccess, 'true']
@@ -444,93 +444,12 @@ Resources:
           default:
             !If
             - HasNewRelic
-            - !If [HasIAMUserSSHAccess, [ssh-access, install, newrelic], [install, newrelic]]
-            - !If [HasIAMUserSSHAccess, [ssh-access, install], [install]]
-        newrelic:
-          packages:
-            rpm:
-              newrelic-sysmond: 'https://download.newrelic.com/pub/newrelic/el5/x86_64/newrelic-sysmond-2.3.0.132-1.x86_64.rpm'
-          files:
-            '/etc/newrelic/nrsysmond.cfg':
-              content: !Sub |
-                license_key=${NewRelicLicenseKey}
-                loglevel=info
-                logfile=/var/log/newrelic/nrsysmond.log
-                labels=StackName:${AWS::StackName};AccountId:${AWS::AccountId};Region:${AWS::Region}
-              mode: '000640'
-              owner: root
-              group: newrelic
-          services:
-            sysvinit:
-              newrelic-sysmond:
-                enabled: true
-                ensureRunning: true
-                files:
-                - '/etc/newrelic/nrsysmond.cfg'
-        ssh-access:
+            - !If [HasIAMUserSSHAccess, [awslogs, ssh-access, install, newrelic], [awslogs, install, newrelic]]
+            - !If [HasIAMUserSSHAccess, [awslogs, ssh-access, install], [awslogs, install]]
+        awslogs:
           packages:
             yum:
-              'aws-cli': []
-          files:
-            '/opt/authorized_keys_command.sh':
-              content: !Sub |
-                #!/bin/bash -e
-                if [ -z "$1" ]; then
-                  exit 1
-                fi
-                aws iam list-ssh-public-keys --user-name "$1" --query "SSHPublicKeys[?Status == 'Active'].[SSHPublicKeyId]" --output text | while read KeyId;
-                do
-                  aws iam get-ssh-public-key --user-name "$1" --ssh-public-key-id "$KeyId" --encoding SSH --query "SSHPublicKey.SSHPublicKeyBody" --output text
-                done
-              mode: '000755'
-              owner: root
-              group: root
-            '/opt/import_users.sh':
-              content: !Sub |
-                #!/bin/bash -e
-                aws iam list-users --query "Users[].[UserName]" --output text | while read User; do
-                  if id -u "$User" >/dev/null 2>&1; then
-                    echo "$User exists"
-                  else
-                    /usr/sbin/adduser "$User"
-                    echo "$User ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$User"
-                  fi
-                done
-              mode: '000755'
-              owner: root
-              group: root
-            '/etc/cron.d/import_users':
-              content: |
-                */10 * * * * root /opt/import_users.sh
-              mode: '000644'
-              owner: root
-              group: root
-          commands:
-            'a_configure_sshd_command':
-              command: 'sed -i "s:#AuthorizedKeysCommand none:AuthorizedKeysCommand /opt/authorized_keys_command.sh:g" /etc/ssh/sshd_config'
-            'b_configure_sshd_commanduser':
-              command: 'sed -i "s:#AuthorizedKeysCommandUser nobody:AuthorizedKeysCommandUser nobody:g" /etc/ssh/sshd_config'
-            'c_import_users':
-              command: './import_users.sh'
-              cwd: '/opt'
-          services:
-            sysvinit:
-              sshd:
-                enabled: true
-                ensureRunning: true
-                commands:
-                - 'a_configure_sshd_command'
-                - 'b_configure_sshd_commanduser'
-        install:
-          packages:
-            yum:
-              ruby: []
               awslogs: []
-            rubygems:
-              'aws-sdk':
-              - '2.7.10'
-              daemons:
-              - '1.2.3'
           files:
             '/etc/awslogs/awscli.conf':
               content: !Sub |
@@ -588,9 +507,130 @@ Resources:
                 file = /var/log/dmesg
                 log_stream_name = {instance_id}/var/log/dmesg
                 log_group_name = ${LogGroup}
+                [/var/log/newrelic/nrsysmond.log]
+                datetime_format = %Y-%m-%d %H:%M:%S
+                file = /var/log/newrelic/nrsysmond.log
+                log_stream_name = {instance_id}/var/log/newrelic/nrsysmond.log
+                log_group_name = ${LogGroup}
               mode: '000644'
               owner: root
               group: root
+          services:
+            sysvinit:
+              awslogs:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                  - awslogs
+                files:
+                - '/etc/awslogs/awslogs.conf'
+                - '/etc/awslogs/awscli.conf'
+        newrelic:
+          packages:
+            rpm:
+              newrelic-sysmond: 'https://download.newrelic.com/pub/newrelic/el5/x86_64/newrelic-sysmond-2.3.0.132-1.x86_64.rpm'
+          files:
+            '/etc/newrelic/nrsysmond.cfg':
+              content: !Sub |
+                license_key=${NewRelicLicenseKey}
+                loglevel=info
+                logfile=/var/log/newrelic/nrsysmond.log
+                labels=StackName:${AWS::StackName};AccountId:${AWS::AccountId};Region:${AWS::Region}
+              mode: '000640'
+              owner: root
+              group: newrelic
+          services:
+            sysvinit:
+              newrelic-sysmond:
+                enabled: true
+                ensureRunning: true
+                files:
+                - '/etc/newrelic/nrsysmond.cfg'
+        ssh-access:
+          packages:
+            yum:
+              'aws-cli': []
+          files:
+            '/opt/authorized_keys_command.sh':
+              content: |
+                #!/bin/bash -e
+                if [ -z "$1" ]; then
+                  exit 1
+                fi
+                SaveUserName="$1"
+                SaveUserName=${SaveUserName//"+"/".plus."}
+                SaveUserName=${SaveUserName//"="/".equal."}
+                SaveUserName=${SaveUserName//","/".comma."}
+                SaveUserName=${SaveUserName//"@"/".at."}
+                aws iam list-ssh-public-keys --user-name "$SaveUserName" --query "SSHPublicKeys[?Status == 'Active'].[SSHPublicKeyId]" --output text | while read KeyId; do
+                  aws iam get-ssh-public-key --user-name "$SaveUserName" --ssh-public-key-id "$KeyId" --encoding SSH --query "SSHPublicKey.SSHPublicKeyBody" --output text
+                done
+              mode: '000755'
+              owner: root
+              group: root
+            '/opt/import_users.sh':
+              content: |
+                #!/bin/bash -e
+                aws iam list-users --query "Users[].[UserName]" --output text | while read User; do
+                  SaveUserName="$User"
+                  SaveUserName=${SaveUserName//"+"/".plus."}
+                  SaveUserName=${SaveUserName//"="/".equal."}
+                  SaveUserName=${SaveUserName//","/".comma."}
+                  SaveUserName=${SaveUserName//"@"/".at."}
+                  if [ "${#SaveUserName}" -le "32" ]; then
+                    if ! id -u "$SaveUserName" >/dev/null 2>&1; then
+                      #sudo will read each file in /etc/sudoers.d, skipping file names that end in ‘~’ or contain a ‘.’ character to avoid causing problems with package manager or editor temporary/backup files.
+                      SaveUserFileName=$(echo "$SaveUserName" | tr "." " ")
+                      /usr/sbin/useradd "$SaveUserName"
+                      echo "$SaveUserName ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$SaveUserFileName"
+                    fi
+                  else
+                    echo "Can not import IAM user ${SaveUserName}. User name is longer than 32 characters."
+                  fi
+                done
+              mode: '000755'
+              owner: root
+              group: root
+            '/etc/cron.d/import_users':
+              content: |
+                */10 * * * * root /opt/import_users.sh
+              mode: '000644'
+              owner: root
+              group: root
+          commands:
+            'a_configure_sshd_command':
+              command: 'sed -i "s:#AuthorizedKeysCommand none:AuthorizedKeysCommand /opt/authorized_keys_command.sh:g" /etc/ssh/sshd_config'
+            'b_configure_sshd_commanduser':
+              command: 'sed -i "s:#AuthorizedKeysCommandUser nobody:AuthorizedKeysCommandUser nobody:g" /etc/ssh/sshd_config'
+            'c_import_users':
+              command: './import_users.sh'
+              cwd: '/opt'
+          services:
+            sysvinit:
+              sshd:
+                enabled: true
+                ensureRunning: true
+                commands:
+                - 'a_configure_sshd_command'
+                - 'b_configure_sshd_commanduser'
+        install:
+          packages:
+            yum:
+              ruby: []
+            rubygems:
+              'aws-sdk':
+              - '2.7.10'
+              daemons:
+              - '1.2.3'
+          commands:
+            'a_update_ecs_init':
+              command: 'yum update -y ecs-init'
+            'b_restart_docker':
+              command: 'service docker restart'
+            'c_start_ecs':
+              command: 'start ecs'
+          files:
             '/etc/cfn/cfn-hup.conf':
               content: !Sub |
                 [main]
@@ -751,15 +791,6 @@ Resources:
               group: root
           services:
             sysvinit:
-              awslogs:
-                enabled: true
-                ensureRunning: true
-                packages:
-                  yum:
-                  - awslogs
-                files:
-                - '/etc/awslogs/awslogs.conf'
-                - '/etc/awslogs/awscli.conf'
               cfn-hup:
                 enabled: true
                 ensureRunning: true
@@ -799,6 +830,14 @@ Resources:
       HealthCheckType: ELB
       TargetGroupARNs:
       - !Ref DefaultTargetGroup
+      NotificationConfigurations: !If
+      - HasAlertTopic
+      - - NotificationTypes:
+          - 'autoscaling:EC2_INSTANCE_LAUNCH_ERROR'
+          - 'autoscaling:EC2_INSTANCE_TERMINATE_ERROR'
+          TopicARN:
+            'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'
+      - !Ref 'AWS::NoValue'
       VPCZoneIdentifier: !Split
       - ','
       - 'Fn::ImportValue':
