@@ -1,0 +1,162 @@
+Parameters:
+  ParentVPCStack:
+    Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
+    Type: String
+
+  ParentSourceStack:
+    Type: String
+
+  DatabaseSnapshot:
+    Type: String
+    Default: ""
+    Description: snap id to restore
+
+  DatabaseEngine:
+    Type: String
+    Default: mysql
+    AllowedValues:
+      - mysql
+      - mariadb
+      - postgres
+
+  DatabaseEngineVersion:
+    Type: String
+
+  DatabaseInstanceClass:
+    Type: String
+    Default: db.t2.micro
+
+  DatabaseAllocatedStorage:
+    Type: Number
+    Default: 8
+
+  DatabaseStorageType:
+    Type: String
+    Default: gp2
+    AllowedValues:
+      - gp2
+      - standard
+      - io1
+
+  DatabaseName:
+    Type: String
+    Description: Name for the application's database'
+  
+  DatabaseUser:
+    Type: String
+    Description: Username for database master user
+
+  DatabasePass:
+    Type: String
+    Description: Password for database master user
+
+Conditions:
+  isSpecificVersion:
+    !Not [!Equals [!Ref DatabaseEngineVersion, ""]]
+  isMySQL:
+    !Equals [!Ref DatabaseEngine, "mysql"]
+  isMariaDB:
+    !Equals [!Ref DatabaseEngine, "mariadb"]
+  isMySQLCompatible:
+    !Or [!Condition isMySQL, !Condition isMariaDB]
+  isPostgreSQL:
+    !Equals [!Ref DatabaseEngine, "postgres"]
+  isRestore:
+    !Not [!Equals [!Ref DatabaseSnapshot, ""]]
+
+Resources:
+  SubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet available for the application database
+      SubnetIds: !Split
+        - ','
+        - 'Fn::ImportValue':
+            !Sub '${ParentVPCStack}-SubnetsPrivate'
+  
+  SecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub ${AWS::StackName}-database
+      VpcId:
+        'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'
+
+  SecurityGroupIngressMySQL:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Condition: isMySQLCompatible
+    Properties:
+      GroupId: !Ref SecurityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId:
+        'Fn::ImportValue': !Sub '${ParentSourceStack}-SecurityGroup'
+  
+  SecurityGroupIngressPostgreSQL:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Condition: isPostgreSQL
+    Properties:
+      GroupId: !Ref SecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId:
+        'Fn::ImportValue': !Sub '${ParentSourceStack}-SecurityGroup'
+
+  Database:
+    Type: "AWS::RDS::DBInstance"
+    DeletionPolicy: Snapshot
+    Properties:
+      AllocatedStorage: !Ref DatabaseAllocatedStorage
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      DBName: !If [isRestore, !Ref "AWS::NoValue", !Ref DatabaseName]
+      Engine: !Ref DatabaseEngine
+      EngineVersion: !If [isSpecificVersion, !Ref DatabaseEngineVersion, !Ref "AWS::NoValue"]
+      StorageType: !Ref DatabaseStorageType
+      MasterUsername: !If [isRestore, !Ref "AWS::NoValue", !Ref DatabaseUser]
+      MasterUserPassword: !If [isRestore, !Ref "AWS::NoValue", !Ref DatabasePass]
+      DBSnapshotIdentifier: !If [isRestore, !Ref DatabaseSnapshot, !Ref "AWS::NoValue"]
+      DBSubnetGroupName: !Ref SubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt SecurityGroup.GroupId
+
+Outputs:
+  TemplateID:
+    Description: 'cloudonaut.io template id'
+    Value: 'rds/database'
+  Cluster:
+    Description: 'RDS database'
+    Value: !Ref Database
+    Export:
+      Name: !Sub '${AWS::StackName}-Database'
+  VPC:
+    Description: 'VPC of RDS database'
+    Value:
+      'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'
+    Export:
+      Name: !Sub '${AWS::StackName}-VPC'
+  SecurityGroup:
+    Description: 'Security Group of RDS database'
+    Value: !Ref SecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroup'
+  EndpointAddress:
+    Description: 'RDS endpoint address'
+    Value: !GetAtt 'Database.Endpoint.Address'
+    Export:
+      Name: !Sub '${AWS::StackName}-EndpointAddress'
+  EndpointPort:
+    Description: 'RDS endpoint port'
+    Value: !GetAtt 'Database.Endpoint.Port'
+    Export:
+      Name: !Sub '${AWS::StackName}-EndpointPort'
+  DatabaseUser:
+    Description: 'database master username'
+    Value: !If [isRestore, "none", !Ref DatabaseUser]
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseUser'
+  DatabasePass:
+    Description: 'database master password'
+    Value: !If [isRestore, "none", !Ref DatabasePass]
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabasePass'
