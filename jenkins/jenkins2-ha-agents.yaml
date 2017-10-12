@@ -145,7 +145,7 @@ Parameters:
   JenkinsVersion:
     Description: 'Jenkins version number'
     Type: String
-    Default: '2.60.2'
+    Default: '2.60.3'
   NewRelicLicenseKey:
     Description: 'Optional New Relic License Key will install the New Relic Servers for Linux agent.'
     Type: String
@@ -154,33 +154,33 @@ Parameters:
 Mappings:
   RegionMap:
     'ap-south-1':
-      AMI: 'ami-47205e28'
+      AMI: 'ami-4fc58420'
     'eu-west-2':
-      AMI: 'ami-ed100689'
+      AMI: 'ami-1a7f6d7e'
     'eu-west-1':
-      AMI: 'ami-d7b9a2b1'
+      AMI: 'ami-acd005d5'
     'ap-northeast-2':
-      AMI: 'ami-e21cc38c'
+      AMI: 'ami-9bec36f5'
     'ap-northeast-1':
-      AMI: 'ami-3bd3c45c'
+      AMI: 'ami-2a69be4c'
     'sa-east-1':
-      AMI: 'ami-87dab1eb'
+      AMI: 'ami-f1344b9d'
     'ca-central-1':
-      AMI: 'ami-a7aa15c3'
+      AMI: 'ami-fd55ec99'
     'ap-southeast-1':
-      AMI: 'ami-77af2014'
+      AMI: 'ami-0797ea64'
     'ap-southeast-2':
-      AMI: 'ami-10918173'
+      AMI: 'ami-8536d6e7'
     'eu-central-1':
-      AMI: 'ami-82be18ed'
+      AMI: 'ami-c7ee5ca8'
     'us-east-1':
-      AMI: 'ami-a4c7edb2'
+      AMI: 'ami-8c1be5f6'
     'us-east-2':
-      AMI: 'ami-8a7859ef'
+      AMI: 'ami-c5062ba0'
     'us-west-1':
-      AMI: 'ami-327f5352'
+      AMI: 'ami-02eada62'
     'us-west-2':
-      AMI: 'ami-6df1e514'
+      AMI: 'ami-e689729e'
 Conditions:
   HasZeroAgents: !Equals [!Ref AgentDesiredCapacity, '0']
   HasKeyName: !Not [!Equals [!Ref KeyName, '']]
@@ -228,6 +228,23 @@ Resources:
       - Key: Name
         Value: 'jenkins-master-storage'
       PerformanceMode: generalPurpose
+  MasterStorageBurstCreditBalanceTooLowAlarm:
+    Condition: HasAlertTopic
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: 'EFS file system is running out of burst credits.  You can expect a significant performance drop in the next hour.'
+      Namespace: 'AWS/EFS'
+      MetricName: BurstCreditBalance
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 1
+      ComparisonOperator: LessThanThreshold
+      Threshold: 192416666667 # 192 GB in Bytes (last hour where you can burst at 100 MB/sec)
+      AlarmActions:
+      - 'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'
+      Dimensions:
+      - Name: FileSystemId
+        Value: !Ref MasterStorage
   MasterStorageMountTargetA:
     Type: 'AWS::EFS::MountTarget'
     Properties:
@@ -601,13 +618,13 @@ Resources:
                 if [ -z "$1" ]; then
                   exit 1
                 fi
-                SaveUserName="$1"
-                SaveUserName=${SaveUserName//"+"/".plus."}
-                SaveUserName=${SaveUserName//"="/".equal."}
-                SaveUserName=${SaveUserName//","/".comma."}
-                SaveUserName=${SaveUserName//"@"/".at."}
-                aws iam list-ssh-public-keys --user-name "$SaveUserName" --query "SSHPublicKeys[?Status == 'Active'].[SSHPublicKeyId]" --output text | while read KeyId; do
-                  aws iam get-ssh-public-key --user-name "$SaveUserName" --ssh-public-key-id "$KeyId" --encoding SSH --query "SSHPublicKey.SSHPublicKeyBody" --output text
+                UnsaveUserName="$1"
+                UnsaveUserName=${UnsaveUserName//".plus."/"+"}
+                UnsaveUserName=${UnsaveUserName//".equal."/"="}
+                UnsaveUserName=${UnsaveUserName//".comma."/","}
+                UnsaveUserName=${UnsaveUserName//".at."/"@"}
+                aws iam list-ssh-public-keys --user-name "$UnsaveUserName" --query "SSHPublicKeys[?Status == 'Active'].[SSHPublicKeyId]" --output text | while read -r KeyId; do
+                  aws iam get-ssh-public-key --user-name "$UnsaveUserName" --ssh-public-key-id "$KeyId" --encoding SSH --query "SSHPublicKey.SSHPublicKeyBody" --output text
                 done
               mode: '000755'
               owner: root
@@ -677,7 +694,7 @@ Resources:
               command: 'mkdir /var/lib/jenkins && chown -R jenkins:jenkins /var/lib/jenkins'
               test: '[ ! -d /var/lib/jenkins ]'
             'd_mountpoint_mount':
-              command: !Sub 'while ! nc -z ${MasterStorage}.efs.${AWS::Region}.amazonaws.com 2049; do sleep 1; done && mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 "${MasterStorage}.efs.${AWS::Region}.amazonaws.com:/" /var/lib/jenkins'
+              command: !Sub 'while ! nc -z ${MasterStorage}.efs.${AWS::Region}.amazonaws.com 2049; do sleep 10; done && sleep 10 && mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 "${MasterStorage}.efs.${AWS::Region}.amazonaws.com:/" /var/lib/jenkins'
               test: 'if mount | grep -q /var/lib/jenkins; then exit 1; else exit 0; fi'
         install:
           packages:
@@ -706,7 +723,7 @@ Resources:
               content: |
                 #!/usr/bin/env ruby
                 # chkconfig:    - 80 20
-                APP_NAME = 'lifecycle-poller'  
+                APP_NAME = 'lifecycle-poller'
                 APP_PATH = '/opt/lifecycle-poller/daemon.rb'
                 case ARGV.first
                   when 'start'
@@ -917,25 +934,31 @@ Resources:
             'c_activate_slave_agent_port':
               command: 'sed -i -e "s@<slaveAgentPort>.*</slaveAgentPort>@<slaveAgentPort>49817</slaveAgentPort>@" /var/lib/jenkins/config.xml'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'd_restart_jenkins':
+            'd_disable_master_executors':
+              command: 'sed -i -e "s@<numExecutors>.*</numExecutors>@<numExecutors>0</numExecutors>@" /var/lib/jenkins/config.xml'
+              test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
+            'e_set_label':
+              command: 'sed -i -e "s@<label>.*</label>@<label>master</label>@" /var/lib/jenkins/config.xml'
+              test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
+            'f_restart_jenkins':
               command: 'service jenkins restart'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'e_await_jenkins':
+            'g_await_jenkins':
               command: 'until $(curl -s -m 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'f_install_plugins':
+            'h_install_plugins':
               command: 'java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar -s "http://localhost:8080/" -auth "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" install-plugin $(cat /root/plugins.txt | tr "\n" " ")'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'g_restart_jenkins':
+            'i_restart_jenkins':
               command: 'service jenkins restart'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'h_await_jenkins':
+            'j_await_jenkins':
               command: 'until $(curl -s -m 60 -o /dev/null -I -f -u "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" http://localhost:8080/cli/); do printf "."; sleep 1; done'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'i_set_admin_password':
-              command: !Sub 'echo ''jenkins.model.Jenkins.instance.securityRealm.createAccount("admin", "${MasterAdminPassword}")'' | java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar -s "http://localhost:8080/" -auth "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" groovy ='
+            'k_set_admin_password':
+              command: !Sub 'echo $''jenkins.model.Jenkins.instance.securityRealm.createAccount("admin", \''${MasterAdminPassword}\'')'' | java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar -s "http://localhost:8080/" -auth "admin:$(cat /var/lib/jenkins/secrets/initialAdminPassword)" groovy ='
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
-            'j_stop_jenkins':
+            'l_stop_jenkins':
               command: 'service jenkins stop'
               test: '[ ! -f /var/lib/jenkins/setup_done.txt ]'
             'z_create_setup_done_file':
@@ -1271,13 +1294,13 @@ Resources:
                 if [ -z "$1" ]; then
                   exit 1
                 fi
-                SaveUserName="$1"
-                SaveUserName=${SaveUserName//"+"/".plus."}
-                SaveUserName=${SaveUserName//"="/".equal."}
-                SaveUserName=${SaveUserName//","/".comma."}
-                SaveUserName=${SaveUserName//"@"/".at."}
-                aws iam list-ssh-public-keys --user-name "$SaveUserName" --query "SSHPublicKeys[?Status == 'Active'].[SSHPublicKeyId]" --output text | while read KeyId; do
-                  aws iam get-ssh-public-key --user-name "$SaveUserName" --ssh-public-key-id "$KeyId" --encoding SSH --query "SSHPublicKey.SSHPublicKeyBody" --output text
+                UnsaveUserName="$1"
+                UnsaveUserName=${UnsaveUserName//".plus."/"+"}
+                UnsaveUserName=${UnsaveUserName//".equal."/"="}
+                UnsaveUserName=${UnsaveUserName//".comma."/","}
+                UnsaveUserName=${UnsaveUserName//".at."/"@"}
+                aws iam list-ssh-public-keys --user-name "$UnsaveUserName" --query "SSHPublicKeys[?Status == 'Active'].[SSHPublicKeyId]" --output text | while read -r KeyId; do
+                  aws iam get-ssh-public-key --user-name "$UnsaveUserName" --ssh-public-key-id "$KeyId" --encoding SSH --query "SSHPublicKey.SSHPublicKeyBody" --output text
                 done
               mode: '000755'
               owner: root
@@ -1435,7 +1458,7 @@ Resources:
               content: |
                 #!/usr/bin/env ruby
                 # chkconfig:    - 80 20
-                APP_NAME = 'agent-healthcheck'  
+                APP_NAME = 'agent-healthcheck'
                 APP_PATH = '/opt/agent-healthcheck/daemon.rb'
                 case ARGV.first
                   when 'start'
@@ -1715,6 +1738,9 @@ Outputs:
   TemplateID:
     Description: 'cloudonaut.io template id'
     Value: 'jenkins/jenkins2-ha-agents'
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
   AdminUsername:
     Description: 'User name for the Jenkins admin.'
     Value: admin

@@ -32,6 +32,13 @@ Metadata:
       - MinSize
       - DesiredCapacity
       - DrainingTimeoutInSeconds
+    - Label:
+        default: 'Cluster Scaling Parameters'
+      Parameters:
+      - ContainerMaxCPU
+      - ContainerMaxMemory
+      - ContainerShortageThreshold
+      - ContainerExcessThreshold
 Parameters:
   ParentVPCStack:
     Description: 'Stack name of parent VPC stack based on vpc/vpc-*azs.yaml template.'
@@ -116,30 +123,52 @@ Parameters:
     ConstraintDescription: 'Must be in the range [60-7200]'
     MinValue: 60
     MaxValue: 7200
+  ContainerMaxCPU:
+    Description: 'The maximum number of cpu reservation per container that you plan to run on this cluster. A container instance has 1,024 CPU units for every CPU core.'
+    Type: Number
+    Default: 128
+  ContainerMaxMemory:
+    Description: 'The maximum number of memory reservation (in MB)  per container that you plan to run on this cluster.'
+    Type: Number
+    Default: 128
+  ContainerShortageThreshold:
+    Description: 'Scale up if free cluster capacity <= containers (based on ContainerMaxCPU and ContainerMaxMemory settings)'
+    Type: Number
+    Default: 2
+    MinValue: 0
+    ConstraintDescription: 'Must be >= 0'
+  ContainerExcessThreshold:
+    Description: 'Scale down if free cluster capacity >= containers (based on ContainerMaxCPU and ContainerMaxMemory settings)'
+    Type: Number
+    Default: 10
+    MinValue: 2
+    ConstraintDescription: 'Must be >= 2'
 Mappings:
   RegionMap:
     'eu-west-2':
-      ECSAMI: 'ami-ff15039b'
+      ECSAMI: 'ami-eb62708f'
     'eu-west-1':
-      ECSAMI: 'ami-809f84e6'
+      ECSAMI: 'ami-13f7226a'
+    'ap-northeast-2':
+      ECSAMI: 'None'
     'ap-northeast-1':
-      ECSAMI: 'ami-e4657283'
+      ECSAMI: 'ami-21815747'
     'ca-central-1':
-      ECSAMI: 'ami-3da81759'
+      ECSAMI: 'ami-9b54edff'
     'ap-southeast-1':
-      ECSAMI: 'ami-19f7787a'
+      ECSAMI: 'ami-99f588fa'
     'ap-southeast-2':
-      ECSAMI: 'ami-42e9f921'
+      ECSAMI: 'ami-4f08e82d'
     'eu-central-1':
-      ECSAMI: 'ami-a3a006cc'
+      ECSAMI: 'ami-40d5672f'
     'us-east-1':
-      ECSAMI: 'ami-04351e12'
+      ECSAMI: 'ami-ec33cc96'
     'us-east-2':
-      ECSAMI: 'ami-207b5a45'
+      ECSAMI: 'ami-34032e51'
     'us-west-1':
-      ECSAMI: 'ami-7d664a1d'
+      ECSAMI: 'ami-d5d0e0b5'
     'us-west-2':
-      ECSAMI: 'ami-57d9cd2e'
+      ECSAMI: 'ami-29f80351'
 Conditions:
   HasKeyName: !Not [!Equals [!Ref KeyName, '']]
   HasIAMUserSSHAccess: !Equals [!Ref IAMUserSSHAccess, 'true']
@@ -415,6 +444,9 @@ Resources:
       Protocol: HTTP
       VpcId:
         'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'
+      TargetGroupAttributes:
+      - Key: 'deregistration_delay.timeout_seconds'
+        Value: 0
   HttpListener:
     Type: 'AWS::ElasticLoadBalancingV2::Listener'
     Properties:
@@ -558,13 +590,13 @@ Resources:
                 if [ -z "$1" ]; then
                   exit 1
                 fi
-                SaveUserName="$1"
-                SaveUserName=${SaveUserName//"+"/".plus."}
-                SaveUserName=${SaveUserName//"="/".equal."}
-                SaveUserName=${SaveUserName//","/".comma."}
-                SaveUserName=${SaveUserName//"@"/".at."}
-                aws iam list-ssh-public-keys --user-name "$SaveUserName" --query "SSHPublicKeys[?Status == 'Active'].[SSHPublicKeyId]" --output text | while read KeyId; do
-                  aws iam get-ssh-public-key --user-name "$SaveUserName" --ssh-public-key-id "$KeyId" --encoding SSH --query "SSHPublicKey.SSHPublicKeyBody" --output text
+                UnsaveUserName="$1"
+                UnsaveUserName=${UnsaveUserName//".plus."/"+"}
+                UnsaveUserName=${UnsaveUserName//".equal."/"="}
+                UnsaveUserName=${UnsaveUserName//".comma."/","}
+                UnsaveUserName=${UnsaveUserName//".at."/"@"}
+                aws iam list-ssh-public-keys --user-name "$UnsaveUserName" --query "SSHPublicKeys[?Status == 'Active'].[SSHPublicKeyId]" --output text | while read -r KeyId; do
+                  aws iam get-ssh-public-key --user-name "$UnsaveUserName" --ssh-public-key-id "$KeyId" --encoding SSH --query "SSHPublicKey.SSHPublicKeyBody" --output text
                 done
               mode: '000755'
               owner: root
@@ -620,7 +652,7 @@ Resources:
               ruby: []
             rubygems:
               'aws-sdk':
-              - '2.7.10'
+              - '3.0.1'
               daemons:
               - '1.2.3'
           commands:
@@ -651,7 +683,7 @@ Resources:
               content: |
                 #!/usr/bin/env ruby
                 # chkconfig:    - 80 20
-                APP_NAME = 'lifecycle-poller'  
+                APP_NAME = 'lifecycle-poller'
                 APP_PATH = '/opt/lifecycle-poller/daemon.rb'
                 case ARGV.first
                   when 'start'
@@ -729,7 +761,7 @@ Resources:
                 def isContainerInstanceIdle(containerInstanceId)
                   ecs = Aws::ECS::Client.new()
                   resp = ecs.list_tasks({
-                    cluster: $conf['cluster'], 
+                    cluster: $conf['cluster'],
                     container_instance: containerInstanceId
                   })
                   return resp.task_arns.empty?
@@ -749,9 +781,9 @@ Resources:
                 def deregisterContainerInstance(containerInstanceId)
                   ecs = Aws::ECS::Client.new()
                   resp = ecs.deregister_container_instance({
-                    cluster: $conf['cluster'], 
-                    container_instance: containerInstanceId, 
-                    force: false 
+                    cluster: $conf['cluster'],
+                    container_instance: containerInstanceId,
+                    force: false
                   })
                 end
                 def completeLifecycleAction(token, hook, asg)
@@ -815,9 +847,11 @@ Resources:
       UserData:
         'Fn::Base64': !Sub |
           #!/bin/bash -x
-          echo "ECS_CLUSTER=${Cluster}" >> /etc/ecs/ecs.config
-          yum install -y aws-cfn-bootstrap
-          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfiguration --region ${AWS::Region}
+          bash -ex << "TRY"
+            echo "ECS_CLUSTER=${Cluster}" >> /etc/ecs/ecs.config
+            yum install -y aws-cfn-bootstrap
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchConfiguration --region ${AWS::Region}
+          TRY
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
   AutoScalingGroup:
     Type: 'AWS::AutoScaling::AutoScalingGroup'
@@ -914,22 +948,38 @@ Resources:
       AutoScalingGroupName: !Ref AutoScalingGroup
       Cooldown: 300
       ScalingAdjustment: -25
-  CPUReservationHighAlarm:
+  ContainerInstancesShortageAlarm:
     Type: 'AWS::CloudWatch::Alarm'
     Properties:
-      AlarmDescription: 'Cluster is running out of CPU (reservation)'
-      Namespace: 'AWS/ECS'
+      AlarmDescription: 'Cluster is running out of container instances'
+      Namespace: !Ref 'AWS::StackName'
       Dimensions:
       - Name: ClusterName
         Value: !Ref Cluster
-      MetricName: CPUReservation
-      ComparisonOperator: GreaterThanThreshold
-      Statistic: Average # special rule because we scale on reservations and not utilization
+      MetricName: SchedulableContainers
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Statistic: Minimum # special rule because we scale on reservations and not utilization
       Period: 60
       EvaluationPeriods: 1
-      Threshold: 80
+      Threshold: !Ref ContainerShortageThreshold
       AlarmActions:
       - !Ref ScaleUpPolicy
+  ContainerInstancesExcessAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: 'Cluster is wasting container instances'
+      Namespace: !Ref 'AWS::StackName'
+      Dimensions:
+      - Name: ClusterName
+        Value: !Ref Cluster
+      MetricName: SchedulableContainers
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Statistic: Maximum # special rule because we scale on reservations and not utilization
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: !Ref ContainerExcessThreshold
+      AlarmActions:
+      - !Ref ScaleDownPolicy
   CPUReservationTooHighAlarm:
     Condition: HasAlertTopic
     Type: 'AWS::CloudWatch::Alarm'
@@ -964,22 +1014,6 @@ Resources:
       Threshold: 80
       AlarmActions:
       - 'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'
-  MemoryReservationHighAlarm:
-    Type: 'AWS::CloudWatch::Alarm'
-    Properties:
-      AlarmDescription: 'Cluster is running out of memory (reservation)'
-      Namespace: 'AWS/ECS'
-      Dimensions:
-      - Name: ClusterName
-        Value: !Ref Cluster
-      MetricName: MemoryReservation
-      ComparisonOperator: GreaterThanThreshold
-      Statistic: Average # special rule because we scale on reservations and not utilization
-      Period: 60
-      EvaluationPeriods: 1
-      Threshold: 80
-      AlarmActions:
-      - !Ref ScaleUpPolicy
   MemoryReservationTooHighAlarm:
     Condition: HasAlertTopic
     Type: 'AWS::CloudWatch::Alarm'
@@ -997,42 +1031,150 @@ Resources:
       Threshold: 90
       AlarmActions:
       - 'Fn::ImportValue': !Sub '${ParentAlertStack}-TopicARN'
-  CPUReservationLowAlarm:
-    Type: 'AWS::CloudWatch::Alarm'
+  # scaling based on SchedulableContainers is described in detail here: http://garbe.io/blog/2017/04/12/a-better-solution-to-ecs-autoscaling/
+  SchedulableContainersRule:
+    Type: 'AWS::Events::Rule'
     Properties:
-      AlarmDescription: 'Cluster is wasting CPU (reservation)'
-      Namespace: 'AWS/ECS'
-      Dimensions:
-      - Name: ClusterName
-        Value: !Ref Cluster
-      MetricName: CPUReservation
-      ComparisonOperator: LessThanThreshold
-      Statistic: Average # special rule because we scale on reservations and not utilization
-      Period: 60
-      EvaluationPeriods: 1
-      Threshold: 20
-      AlarmActions:
-      - !Ref ScaleDownPolicy
-  MemoryReservationLowAlarm:
-    Type: 'AWS::CloudWatch::Alarm'
+      EventPattern:
+        source:
+        - 'aws.ecs'
+        'detail-type':
+        - 'ECS Container Instance State Change'
+      State: ENABLED
+      Targets:
+      - Arn: !GetAtt 'SchedulableContainersLambda.Arn'
+        Id: lambda
+  SchedulableContainersCron:
+    Type: 'AWS::Events::Rule'
     Properties:
-      AlarmDescription: 'Cluster is wasting memory (reservation)'
-      Namespace: 'AWS/ECS'
-      Dimensions:
-      - Name: ClusterName
-        Value: !Ref Cluster
-      MetricName: MemoryReservation
-      ComparisonOperator: LessThanThreshold
-      Statistic: Average # special rule because we scale on reservations and not utilization
-      Period: 60
-      EvaluationPeriods: 1
-      Threshold: 20
-      AlarmActions:
-      - !Ref ScaleDownPolicy
+      ScheduleExpression: 'rate(1 minute)'
+      State: ENABLED
+      Targets:
+      - Arn: !GetAtt 'SchedulableContainersLambda.Arn'
+        Id: lambda
+  SchedulableContainersLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 'lambda.amazonaws.com'
+          Action: 'sts:AssumeRole'
+      Policies:
+      - PolicyName: logs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'logs:CreateLogGroup'
+            - 'logs:CreateLogStream'
+            - 'logs:PutLogEvents'
+            Resource: 'arn:aws:logs:*:*:*'
+      - PolicyName: ecs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action: 'ecs:ListContainerInstances'
+            Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${Cluster}'
+          - Effect: Allow
+            Action: 'ecs:DescribeContainerInstances'
+            Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:container-instance/*'
+      - PolicyName: cloudwatch
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action: 'cloudwatch:PutMetricData'
+            Resource: '*'
+  SchedulableContainersLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref SchedulableContainersLambda
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt 'SchedulableContainersRule.Arn'
+  SchedulableContainersLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile: !Sub |
+          'use strict';
+          const AWS = require('aws-sdk');
+          const ecs = new AWS.ECS({apiVersion: '2014-11-13'});
+          const cloudwatch = new AWS.CloudWatch({apiVersion: '2010-08-01'});
+          const CONTAINER_MAX_CPU = ${ContainerMaxCPU};
+          const CONTAINER_MAX_MEMORY = ${ContainerMaxMemory};
+          const CLUSTER = '${Cluster}';
+          const NAMESPACE = '${AWS::StackName}';
+          function list(nextToken) {
+            return ecs.listContainerInstances({
+              cluster: CLUSTER,
+              maxResults: 1,
+              nextToken: nextToken,
+              status: 'ACTIVE'
+            }).promise();
+          }
+          function describe(containerInstanceArns) {
+            return ecs.describeContainerInstances({
+              cluster: CLUSTER,
+              containerInstances: containerInstanceArns
+            }).promise();
+          }
+          function compute(totalSchedulableContainers, nextToken) {
+            return list(nextToken)
+              .then((list) => {
+                return describe(list.containerInstanceArns)
+                  .then((data) => {
+                    const localSchedulableContainers = data.containerInstances
+                      .map((instance) => ({
+                        cpu: instance.remainingResources.find((resource) => resource.name === 'CPU').integerValue,
+                        memory: instance.remainingResources.find((resource) => resource.name === 'MEMORY').integerValue
+                      }))
+                      .map((remaining) => Math.min(Math.floor(remaining.cpu/CONTAINER_MAX_CPU), Math.floor(remaining.memory/CONTAINER_MAX_MEMORY)))
+                      .reduce((acc, containers) => acc + containers, 0);
+                    console.log(`localSchedulableContainers ${!localSchedulableContainers}`);
+                    if (list.nextToken !== null && list.nextToken !== undefined) {
+                      return compute(localSchedulableContainers + totalSchedulableContainers, list.nextToken);
+                    } else {
+                      return localSchedulableContainers + totalSchedulableContainers;
+                    }
+                  });
+              });
+          }
+          exports.handler = (event, context, cb) => {
+            console.log(`Invoke: ${!JSON.stringify(event)}`);
+            compute(0, undefined)
+              .then((schedulableContainers) => {
+                console.log(`schedulableContainers: ${!schedulableContainers}`);
+                return cloudwatch.putMetricData({
+                  MetricData: [{
+                    MetricName: 'SchedulableContainers',
+                    Dimensions: [{
+                      Name: 'ClusterName',
+                      Value: CLUSTER
+                    }],
+                    Value: schedulableContainers,
+                    Unit: 'Count'
+                  }],
+                  Namespace: NAMESPACE
+                }).promise();
+              })
+              .then(() => cb())
+              .catch(cb);
+          };
+      Handler: 'index.handler'
+      MemorySize: 128
+      Role: !GetAtt 'SchedulableContainersLambdaRole.Arn'
+      Runtime: 'nodejs6.10'
+      Timeout: 60
 Outputs:
   TemplateID:
     Description: 'cloudonaut.io template id'
     Value: 'ecs/cluster'
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
   Cluster:
     Description: 'ECS cluster.'
     Value: !Ref Cluster

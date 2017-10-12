@@ -90,7 +90,7 @@ Conditions:
 Resources:
   TaskDefinition:
     Type: 'AWS::ECS::TaskDefinition'
-    Properties: 
+    Properties:
       Family: !Ref 'AWS::StackName'
       NetworkMode: bridge
       ContainerDefinitions:
@@ -177,8 +177,8 @@ Resources:
       VpcId:
         'Fn::ImportValue': !Sub '${ParentVPCStack}-VPC'
       TargetGroupAttributes:
-        - Key: deregistration_delay.timeout_seconds
-          Value: !Ref LoadBalancerDeregistrationDelay
+      - Key: deregistration_delay.timeout_seconds
+        Value: !Ref LoadBalancerDeregistrationDelay
   HTTPCodeELB5XXTooHighAlarm:
     Condition: HasAlertTopic
     Type: 'AWS::CloudWatch::Alarm'
@@ -326,7 +326,7 @@ Resources:
       PolicyName: !Sub '${AWS::StackName}-scale-up'
       PolicyType: StepScaling
       ScalingTargetId: !Ref ScalableTarget
-      StepScalingPolicyConfiguration: 
+      StepScalingPolicyConfiguration:
         AdjustmentType: PercentChangeInCapacity
         Cooldown: 300
         MinAdjustmentMagnitude: 1
@@ -339,7 +339,7 @@ Resources:
       PolicyName: !Sub '${AWS::StackName}-scale-down'
       PolicyType: StepScaling
       ScalingTargetId: !Ref ScalableTarget
-      StepScalingPolicyConfiguration: 
+      StepScalingPolicyConfiguration:
         AdjustmentType: PercentChangeInCapacity
         Cooldown: 300
         MinAdjustmentMagnitude: 1
@@ -408,6 +408,9 @@ Outputs:
   TemplateID:
     Description: 'cloudonaut.io template id'
     Value: 'ecs/service-dedicated-alb'
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
   DNSName:
     Description: 'The DNS name for the ECS cluster/service load balancer.'
     Value: !GetAtt 'LoadBalancer.DNSName'
